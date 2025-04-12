@@ -84,7 +84,16 @@ public class Image2Map implements ModInitializer {
             dispatcher.register(literal("image2map")
                     .requires(Permissions.require("image2map.use", CONFIG.minPermLevel))
                     .then(literal("create")
-                            .requires(Permissions.require("image2map.create", 0))
+                        .then(literal("single")
+                            .requires(Permissions.require("image2map.create_single", 0))
+                                .then(argument("mode", StringArgumentType.word()).suggests(new DitherModeSuggestionProvider())
+                                    .then(argument("path", StringArgumentType.greedyString())
+                                        .executes(this::createSingle))
+                                )
+                        )
+
+                        .then(literal("large")
+                            .requires(Permissions.require("image2map.create_large", 1))
                             .then(argument("width", IntegerArgumentType.integer(1))
                                     .then(argument("height", IntegerArgumentType.integer(1))
                                             .then(argument("mode", StringArgumentType.word()).suggests(new DitherModeSuggestionProvider())
@@ -98,7 +107,9 @@ public class Image2Map implements ModInitializer {
                                             .executes(this::createMap)
                                     )
                             )
+                        )                        
                     )
+                    
                     .then(literal("create-folder")
                             .requires(Permissions.require("image2map.createfolder", 3).and(x -> CONFIG.allowLocalFiles))
                             .then(argument("width", IntegerArgumentType.integer(1))
@@ -116,7 +127,7 @@ public class Image2Map implements ModInitializer {
                             )
                     )
                     .then(literal("preview")
-                            .requires(Permissions.require("image2map.preview", 0))
+                            .requires(Permissions.require("image2map.preview", 1))
                             .then(argument("path", StringArgumentType.greedyString())
                                     .executes(this::openPreview)
                             )
@@ -322,6 +333,57 @@ public class Image2Map implements ModInitializer {
 
             int finalHeight = height;
             int finalWidth = width;
+            source.sendFeedback(() -> Text.literal("Converting into maps..."), false);
+
+            CompletableFuture.supplyAsync(() -> MapRenderer.render(image, mode, finalWidth, finalHeight)).thenAcceptAsync(mapImage -> {
+                var items = MapRenderer.toVanillaItems(mapImage, source.getWorld(), input);
+                giveToPlayer(player, items, input, finalWidth, finalHeight);
+                source.sendFeedback(() -> Text.literal("Done!"), false);
+            }, source.getServer());
+            return null;
+        }, source.getServer());
+
+        return 1;
+    }
+
+    private int createSingle(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+        ServerCommandSource source = context.getSource();
+
+        PlayerEntity player = source.getPlayer();
+        DitherMode mode;
+        String modeStr = StringArgumentType.getString(context, "mode");
+        try {
+            mode = DitherMode.fromString(modeStr);
+        } catch (IllegalArgumentException e) {
+            throw new SimpleCommandExceptionType(() -> "Invalid dither mode '" + modeStr + "'").create();
+        }
+
+        String input = StringArgumentType.getString(context, "path");
+
+        source.sendFeedback(() -> Text.literal("Getting image..."), false);
+
+        getImage(input).orTimeout(20, TimeUnit.SECONDS).handleAsync((image, ex) -> {
+            if (ex instanceof TimeoutException) {
+                source.sendFeedback(() -> Text.literal("Downloading or reading of the image took too long!"), false);
+                return null;
+            } else if (ex != null) {
+                if (ex instanceof RuntimeException ru && ru.getCause() != null) {
+                    ex = ru.getCause();
+                }
+
+                Throwable finalEx = ex;
+                source.sendFeedback(() -> Text.literal("The image isn't valid (hover for more info)!")
+                        .setStyle(Style.EMPTY.withColor(Formatting.RED).withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(finalEx.getMessage())))), false);
+                return null;
+            }
+
+            if (image == null) {
+                source.sendFeedback(() -> Text.literal("That doesn't seem to be a valid image (unknown reason)!"), false);
+                return null;
+            }
+
+            int finalHeight = 128;
+            int finalWidth = 128;
             source.sendFeedback(() -> Text.literal("Converting into maps..."), false);
 
             CompletableFuture.supplyAsync(() -> MapRenderer.render(image, mode, finalWidth, finalHeight)).thenAcceptAsync(mapImage -> {
